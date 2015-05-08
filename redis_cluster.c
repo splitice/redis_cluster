@@ -162,23 +162,6 @@ redis_list_ctx_st *_redis_list_pop_front(redis_cluster_node_st *cluster_node)
     return node;
 }
 
-void _redis_cluster_clear(redis_cluster_st *cluster)
-{
-    if (!cluster) {
-        return;
-    }
-    int i;
-
-    for (i = 0; i < cluster->node_count; ++i) {
-        _redis_cluster_node_clear(cluster->redis_nodes[i]);
-        free(cluster->redis_nodes[i]);
-        cluster->redis_nodes[i] = NULL;
-    }
-    cluster->node_count = 0;
-
-    memset(cluster->slots_handler, 0x00, sizeof(redis_cluster_node_st *) * REDIS_CLUSTER_SLOTS);
-}
-
 int _redis_cluster_refreash(redis_cluster_st *cluster, const redisReply *reply)
 {
     if (!cluster || !reply) {
@@ -507,6 +490,23 @@ ON_INIT_ERROR:
         ctx = NULL;
     }
     return NULL;
+}
+
+void redis_cluster_free(redis_cluster_st *cluster)
+{
+    if (!cluster) {
+        return;
+    }
+    int i;
+
+    for (i = 0; i < cluster->node_count; ++i) {
+        _redis_cluster_node_clear(cluster->redis_nodes[i]);
+        free(cluster->redis_nodes[i]);
+        cluster->redis_nodes[i] = NULL;
+    }
+    cluster->node_count = 0;
+
+    free(cluster);
 }
 
 redisReply *redis_cluster_execute(redis_cluster_st *cluster, const char *key, const char *fmt, ...)

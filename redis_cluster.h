@@ -38,7 +38,6 @@ typedef struct {
     int master_ctx_cnt;
     struct timeval timeout;
 }redis_cluster_st;
-void _redis_cluster_clear(redis_cluster_st *cluster);
 int _redis_cluster_refreash(redis_cluster_st *cluster, const redisReply *reply);
 redis_list_ctx_st *_redis_cluster_get_context(redis_cluster_st *cluster, const char *key);
 void _redis_cluster_set_slot(redis_cluster_st *cluster, redis_cluster_node_st *cluster_node, int slot);
@@ -50,6 +49,7 @@ redisReply *_redis_command_cluster_slots(redisContext *ctx);
 
 /* Client interface */
 redis_cluster_st *redis_cluster_init(const char (*ips)[64], int *ports, int count, int timeout, int master_ctx_cnt);
+void redis_cluster_free(redis_cluster_st *cluster);
 redisReply *redis_cluster_execute(redis_cluster_st *cluster, const char *key, const char *fmt, ...);
 redisReply *redis_cluster_arg_execute(redis_cluster_st *cluster, int slot, const char *fmt, va_list ap);
 int redis_cluster_append(redis_cluster_st *cluster, const char *key, const char *fmt, ...);
