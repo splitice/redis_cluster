@@ -12,7 +12,7 @@ typedef struct _redis_list_ctx_st{
     redisContext *ctx;
     int id;
 }redis_list_ctx_st;
-void _redis_list_ctx_clear(redis_list_ctx_st *list_ctx);
+void _redis_list_ctx_free(redis_list_ctx_st *list_ctx);
 redis_list_ctx_st *_redis_list_ctx_init(int id, const char *ip, int port, struct timeval timeout);
 
 typedef struct {
@@ -24,7 +24,7 @@ typedef struct {
     int id;
 }redis_cluster_node_st;
 redis_cluster_node_st *_redis_cluster_node_init(int id, const char *ip, int port);
-void _redis_cluster_node_clear(redis_cluster_node_st *cluster_node);
+void _redis_cluster_node_free(redis_cluster_node_st *cluster_node);
 void _redis_list_push_back(redis_cluster_node_st *cluster_node, redis_list_ctx_st *ctx);
 redis_list_ctx_st *_redis_list_pop_front(redis_cluster_node_st *cluster_node);
 

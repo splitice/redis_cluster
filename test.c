@@ -46,9 +46,11 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    char c;
     redisReply *reply;
     while (1) {
-        getchar();
+        c = getchar();
+        if (c == 'q') break;
         reply = redis_cluster_execute(cluster, cmd, cmd_args);
         if (!reply) {
             printf("Get reply fail.\n");

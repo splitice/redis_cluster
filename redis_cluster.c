@@ -60,7 +60,7 @@ uint16_t _crc16(const char *buf, int len) {
     return crc;
 }
 
-void _redis_list_ctx_clear(redis_list_ctx_st *list_ctx)
+void _redis_list_ctx_free(redis_list_ctx_st *list_ctx)
 {
     if (!list_ctx) {
         return;
@@ -71,6 +71,8 @@ void _redis_list_ctx_clear(redis_list_ctx_st *list_ctx)
     }
     list_ctx->ctx = NULL;
     list_ctx->next = NULL;
+
+    free(list_ctx);
 }
 
 redis_list_ctx_st *_redis_list_ctx_init(int id, const char *ip, int port, struct timeval timeout)
@@ -112,13 +114,14 @@ redis_cluster_node_st *_redis_cluster_node_init(int id, const char *ip, int port
     return result;
 }
 
-void _redis_cluster_node_clear(redis_cluster_node_st *cluster_node)
+void _redis_cluster_node_free(redis_cluster_node_st *cluster_node)
 {
     redis_list_ctx_st *list_ctx;
     while ((list_ctx = _redis_list_pop_front(cluster_node))) {
-        _redis_list_ctx_clear(list_ctx);
-        free(list_ctx);
+        _redis_list_ctx_free(list_ctx);
     }
+
+    free(cluster_node);
 }
 
 void _redis_list_push_back(redis_cluster_node_st *cluster_node, redis_list_ctx_st *ctx)
@@ -200,8 +203,9 @@ int _redis_cluster_refreash(redis_cluster_st *cluster, const redisReply *reply)
             if (cluster->redis_nodes[i]) {
                 if (cluster->node_count < REDIS_CLUSTER_NODE_COUNT) {
                     cluster->redis_nodes[cluster->node_count] = cluster->redis_nodes[i];
+                    ++cluster->node_count;
                 } else {
-                    _redis_cluster_node_clear(cluster->redis_nodes[i]);
+                    _redis_cluster_node_free(cluster->redis_nodes[i]);
                 }
                 cluster->redis_nodes[i] = NULL;
             }
@@ -229,20 +233,24 @@ int _redis_cluster_refreash(redis_cluster_st *cluster, const redisReply *reply)
 
             rc = _redis_command_ping(list_ctx->ctx);
             if (rc < 0) {
-                _redis_list_ctx_clear(list_ctx);
-                free(list_ctx);
+                _redis_list_ctx_free(list_ctx);
                 list_ctx = NULL;
+                continue;
             }
 
             if (health_count < cluster->master_ctx_cnt) {
                 _redis_list_push_back(cluster->redis_nodes[i], list_ctx);
                 ++health_count;
+            } else {
+                _redis_list_ctx_free(list_ctx);
+                list_ctx = NULL;
+                continue;
             }
         }
 
         /* Make connection */
         if (cluster->redis_nodes[i]->list_count < cluster->master_ctx_cnt) {
-            for (k = 0; k < cluster->master_ctx_cnt - cluster->redis_nodes[i]->list_count; ++k) {
+            for (k = cluster->redis_nodes[i]->list_count; k < cluster->master_ctx_cnt; ++k) {
                 list_ctx = _redis_list_ctx_init(i, ip, port, cluster->timeout);
                 if (!list_ctx) {
                     _redis_cluster_log("Make new connection fail.\n");
@@ -275,8 +283,9 @@ int _redis_cluster_refreash(redis_cluster_st *cluster, const redisReply *reply)
                 if (cluster->redis_nodes[cluster_idx]) {
                     if (cluster->node_count < REDIS_CLUSTER_NODE_COUNT) {
                         cluster->redis_nodes[cluster->node_count] = cluster->redis_nodes[cluster_idx];
+                        ++cluster->node_count;
                     } else {
-                        _redis_cluster_node_clear(cluster->redis_nodes[cluster_idx]);
+                        _redis_cluster_node_free(cluster->redis_nodes[cluster_idx]);
                     }
                     cluster->redis_nodes[cluster_idx] = NULL;
                 }
@@ -305,14 +314,18 @@ int _redis_cluster_refreash(redis_cluster_st *cluster, const redisReply *reply)
 
                 rc = _redis_command_ping(list_ctx->ctx);
                 if (rc < 0) {
-                    _redis_list_ctx_clear(list_ctx);
-                    free(list_ctx);
+                    _redis_list_ctx_free(list_ctx);
                     list_ctx = NULL;
+                    continue;
                 }
 
                 if (health_count < 1) {
                     _redis_list_push_back(cluster->redis_nodes[cluster_idx], list_ctx);
                     ++health_count;
+                } else {
+                    _redis_list_ctx_free(list_ctx);
+                    list_ctx = NULL;
+                    continue;
                 }
             }
 
@@ -334,7 +347,7 @@ int _redis_cluster_refreash(redis_cluster_st *cluster, const redisReply *reply)
     }
 
     for (i = cluster_idx; i < cluster->node_count; ++i) {
-        _redis_cluster_node_clear(cluster->redis_nodes[i]);
+        _redis_cluster_node_free(cluster->redis_nodes[i]);
         cluster->redis_nodes[i] = NULL;
     }
     cluster->node_count = cluster_idx;
@@ -471,9 +484,7 @@ redis_cluster_st *redis_cluster_init(const char (*ips)[64], int *ports, int coun
     }
 
     freeReplyObject(r);
-    r = NULL;
     redisFree(ctx);
-    ctx = NULL;
     return cluster;
 
 ON_INIT_ERROR:
@@ -500,8 +511,7 @@ void redis_cluster_free(redis_cluster_st *cluster)
     int i;
 
     for (i = 0; i < cluster->node_count; ++i) {
-        _redis_cluster_node_clear(cluster->redis_nodes[i]);
-        free(cluster->redis_nodes[i]);
+        _redis_cluster_node_free(cluster->redis_nodes[i]);
         cluster->redis_nodes[i] = NULL;
     }
     cluster->node_count = 0;
@@ -563,16 +573,15 @@ redisReply *redis_cluster_arg_execute(redis_cluster_st *cluster, int slot, const
                     if (reply) {
                         freeReplyObject(reply);
                     }
-                    _redis_list_ctx_clear(list_ctx);
-                    free(list_ctx);
+                    _redis_list_ctx_free(list_ctx);
                     _redis_cluster_log("Refresh get reply fail.\n");
                     return NULL;
                 }
 
                 rc = _redis_cluster_refreash(cluster, reply);
                 if (rc < 0) {
-                    _redis_list_ctx_clear(list_ctx);
-                    free(list_ctx);
+                    freeReplyObject(reply);
+                    _redis_list_ctx_free(list_ctx);
                     _redis_cluster_log("Refresh fail.\n");
                     return NULL;
                 }
@@ -582,8 +591,6 @@ redisReply *redis_cluster_arg_execute(redis_cluster_st *cluster, int slot, const
 
                 handler_idx = _redis_cluster_find_connection(cluster, cluster->slots_handler[slot]->ip, cluster->slots_handler[slot]->port);
                 if (handler_idx < 0) {
-                    _redis_list_ctx_clear(list_ctx);
-                    free(list_ctx);
                     _redis_cluster_log("Find slot handler connection fail.\n");
                     return NULL;
                 }
@@ -599,10 +606,10 @@ redisReply *redis_cluster_arg_execute(redis_cluster_st *cluster, int slot, const
     }
 
     _redis_cluster_log("Slot[%d] handler[%s:%d]\n", slot, cluster->redis_nodes[handler_idx]->ip, cluster->redis_nodes[handler_idx]->port);
+    assert(list_ctx);
     reply = (redisReply *)(redisvCommand(list_ctx->ctx, fmt, ap));
     if (!reply) {
-        _redis_list_ctx_clear(list_ctx);
-        free(list_ctx);
+        _redis_list_ctx_free(list_ctx);
         return NULL;
     }
 
@@ -627,34 +634,30 @@ redisReply *redis_cluster_arg_execute(redis_cluster_st *cluster, int slot, const
         s = strchr(p + 1, ':');    /* MOVED 3999[P]127.0.0.1[S]6381 */
         *s = '\0';
         handler_idx = _redis_cluster_find_connection(cluster, p + 1, atoi(s + 1));
+        freeReplyObject(reply);
         if (handler_idx < 0) {
             /* Refresh cluster nodes */
-            freeReplyObject(reply);
             reply = _redis_command_cluster_slots(list_ctx->ctx);
             if (!reply || REDIS_REPLY_ARRAY != reply->type) {
                 if (reply) {
                     freeReplyObject(reply);
                 }
-                _redis_list_ctx_clear(list_ctx);
-                free(list_ctx);
+                _redis_list_ctx_free(list_ctx);
                 return NULL;
             }
 
             rc = _redis_cluster_refreash(cluster, reply);
             if (rc < 0) {
-                _redis_list_ctx_clear(list_ctx);
-                free(list_ctx);
+                _redis_list_ctx_free(list_ctx);
                 return NULL;
             }
+            freeReplyObject(reply);
 
-            handler_idx = _redis_cluster_find_connection(cluster, p + 1, atoi(s + 1));
+            handler_idx = cluster->slots_handler[slot]->id;
             if (handler_idx < 0) {
-                _redis_list_ctx_clear(list_ctx);
-                free(list_ctx);
+                _redis_list_ctx_free(list_ctx);
                 return NULL;
             }
-
-            _redis_list_push_back(cluster->redis_nodes[list_ctx->id], list_ctx);
         } else {
             if (!is_ask) {
                 /* Save redirection */
@@ -662,6 +665,7 @@ redisReply *redis_cluster_arg_execute(redis_cluster_st *cluster, int slot, const
             }
         }
 
+        _redis_list_push_back(cluster->redis_nodes[list_ctx->id], list_ctx);
         list_ctx = _redis_list_pop_front(cluster->redis_nodes[handler_idx]);
         if (!list_ctx) {
             list_ctx = _redis_list_ctx_init(handler_idx, cluster->redis_nodes[handler_idx]->ip, cluster->redis_nodes[handler_idx]->port, cluster->timeout);
@@ -670,11 +674,9 @@ redisReply *redis_cluster_arg_execute(redis_cluster_st *cluster, int slot, const
             }
         }
 
-        freeReplyObject(reply);
         reply = (redisReply *)(redisvCommand(list_ctx->ctx, fmt, ap));
         if (!reply) {
-            _redis_list_ctx_clear(list_ctx);
-            free(list_ctx);
+            _redis_list_ctx_free(list_ctx);
             return NULL;
         }
     }
