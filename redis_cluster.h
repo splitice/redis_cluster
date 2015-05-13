@@ -2,32 +2,44 @@
 #define POCO_REDIS_CLUSTER_H
 
 #include <stdint.h>
+
+#include <stdarg.h>
 #include "hiredis/hiredis.h"
 
 uint16_t _crc16(const char *buf, int len);
 
 /* redisContext link list */
-typedef struct _redis_list_ctx_st{
-    struct _redis_list_ctx_st *next;
-    redisContext *ctx;
-    int id;
-}redis_list_ctx_st;
-void _redis_list_ctx_free(redis_list_ctx_st *list_ctx);
-redis_list_ctx_st *_redis_list_ctx_init(int id, const char *ip, int port, struct timeval timeout);
-
 typedef struct {
-    redis_list_ctx_st *head;
-    redis_list_ctx_st *tail;
-    int list_count;
+    redisContext *ctx;
     char ip[64];
     int port;
     int id;
-}redis_cluster_node_st;
+} redis_cluster_node_st;
 redis_cluster_node_st *_redis_cluster_node_init(int id, const char *ip, int port);
 void _redis_cluster_node_free(redis_cluster_node_st *cluster_node);
-void _redis_list_push_back(redis_cluster_node_st *cluster_node, redis_list_ctx_st *ctx);
-redis_list_ctx_st *_redis_list_pop_front(redis_cluster_node_st *cluster_node);
 
+/* Pipelining cache */
+typedef struct {
+    int slot;
+    char fmt[256 + 1];
+    va_list ap;
+    int valid_ap;
+} _append_slot_record;
+
+#define DEFAULT_LIST_SIZE 4096
+typedef struct {
+    _append_slot_record *list;
+    int list_size;
+    int count;
+    int pos;
+} _append_slot_list;
+_append_slot_list *_slot_list_init();
+void _slot_list_free(_append_slot_list *slot_list);
+void _slot_list_reset(_append_slot_list *slot_list);
+int _slot_list_add(_append_slot_list *slot_list, int slot, const char *fmt, va_list ap);
+_append_slot_record *_slot_list_get(_append_slot_list *slot_list);
+
+/* Cluster manager */
 #define REDIS_CLUSTER_NODE_COUNT 256
 #define REDIS_CLUSTER_SLOTS 16384
 typedef struct {
@@ -37,9 +49,10 @@ typedef struct {
     int state;
     int master_ctx_cnt;
     struct timeval timeout;
-}redis_cluster_st;
-int _redis_cluster_refreash(redis_cluster_st *cluster, const redisReply *reply);
-redis_list_ctx_st *_redis_cluster_get_context(redis_cluster_st *cluster, const char *key);
+    _append_slot_list *slot_list;
+} redis_cluster_st;
+int _redis_cluster_refreash(redis_cluster_st *cluster);
+int _redis_cluster_refreash_from_reply(redis_cluster_st *cluster, const redisReply *reply);
 void _redis_cluster_set_slot(redis_cluster_st *cluster, redis_cluster_node_st *cluster_node, int slot);
 int _redis_cluster_find_connection(redis_cluster_st *cluster, const char *ip, int port);
 
@@ -50,9 +63,11 @@ redisReply *_redis_command_cluster_slots(redisContext *ctx);
 /* Client interface */
 redis_cluster_st *redis_cluster_init(const char (*ips)[64], int *ports, int count, int timeout, int master_ctx_cnt);
 void redis_cluster_free(redis_cluster_st *cluster);
+
 redisReply *redis_cluster_execute(redis_cluster_st *cluster, const char *key, const char *fmt, ...);
 redisReply *redis_cluster_arg_execute(redis_cluster_st *cluster, int slot, const char *fmt, va_list ap);
 int redis_cluster_append(redis_cluster_st *cluster, const char *key, const char *fmt, ...);
-redisReply *redis_cluster_get_reply();
+int redis_cluster_arg_append(redis_cluster_st *cluster, int slot, const char *fmt, va_list ap);
+redisReply *redis_cluster_get_reply(redis_cluster_st *cluster);
 
 #endif // POCO_REDIS_CLUSTER_H

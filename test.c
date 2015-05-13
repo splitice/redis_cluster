@@ -13,7 +13,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    char *cmd = argv[2];
+    char *key = argv[2];
     char cmd_args[1024] = {0x00};
     int i;
     for (i = 1; i < argc; ++i) {
@@ -46,17 +46,48 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    int rc;
     char c;
     redisReply *reply;
     while (1) {
         c = getchar();
         if (c == 'q') break;
-        reply = redis_cluster_execute(cluster, cmd, cmd_args);
+        reply = redis_cluster_execute(cluster, key, cmd_args);
+        if (!reply) {
+            printf("Execute fail.\n");
+            continue;
+        }
+
+        printReply(reply, 0, 0);
+        freeReplyObject(reply);
+
+        /* Pipelining testing */
+
+        rc = redis_cluster_append(cluster, key, cmd_args);
+        if (rc < 0) {
+            printf("Append command fail.\n");
+            continue;
+        }
+
+        rc = redis_cluster_append(cluster, key, cmd_args);
+        if (rc < 0) {
+            printf("Append command fail.\n");
+            continue;
+        }
+
+        reply = redis_cluster_get_reply(cluster);
         if (!reply) {
             printf("Get reply fail.\n");
             continue;
         }
+        printReply(reply, 0, 0);
+        freeReplyObject(reply);
 
+        reply = redis_cluster_get_reply(cluster);
+        if (!reply) {
+            printf("Get reply fail.\n");
+            continue;
+        }
         printReply(reply, 0, 0);
         freeReplyObject(reply);
     }
