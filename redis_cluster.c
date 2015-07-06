@@ -6,7 +6,11 @@
 #include <string.h>
 #include <assert.h>
 
-#define DEBUG
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+// #define DEBUG
 #ifdef DEBUG
 #define _redis_cluster_log(fmt, arg...) _redis_cluster_print_log(__LINE__, fmt, ##arg)
 void _redis_cluster_print_log(int line, const char *fmt, ...)
@@ -94,7 +98,7 @@ void _redis_cluster_node_free(redis_cluster_node_st *cluster_node)
     free(cluster_node);
 }
 
-int _redis_cluster_refreash(redis_cluster_st *cluster)
+int _redis_cluster_refresh(redis_cluster_st *cluster)
 {
     int rc;
     redisReply *reply;
@@ -124,7 +128,7 @@ int _redis_cluster_refreash(redis_cluster_st *cluster)
             continue;
         }
 
-        rc = _redis_cluster_refreash_from_reply(cluster, reply);
+        rc = _redis_cluster_refresh_from_reply(cluster, reply);
         freeReplyObject(reply);
         if (rc < 0) {
             redisFree(cluster->redis_nodes[i]->ctx);
@@ -139,7 +143,7 @@ int _redis_cluster_refreash(redis_cluster_st *cluster)
     return -1;
 }
 
-int _redis_cluster_refreash_from_reply(redis_cluster_st *cluster, const redisReply *reply)
+int _redis_cluster_refresh_from_reply(redis_cluster_st *cluster, const redisReply *reply)
 {
     if (!cluster || !reply) {
         return -1;
@@ -150,7 +154,7 @@ int _redis_cluster_refreash_from_reply(redis_cluster_st *cluster, const redisRep
     int cluster_node_count = reply->elements;
     int cluster_idx = cluster_node_count;
     int old_idx;
-    const char *ip;
+    char ip[512];
     int port;
 
     for (i = 0; i < reply->elements; ++i) {
@@ -164,7 +168,10 @@ int _redis_cluster_refreash_from_reply(redis_cluster_st *cluster, const redisRep
             return -1;
         }
 
-        ip = reply->element[i]->element[2]->element[0]->str;
+        strcpy(ip, reply->element[i]->element[2]->element[0]->str);
+        if (0 != cluster->host_mask_) {
+            _redis_cluster_hostmask_exchang(cluster->host_mask_, cluster->host_dest_, ip);
+        }
         port = reply->element[i]->element[2]->element[1]->integer;
 
         /* Master node */
@@ -226,7 +233,10 @@ int _redis_cluster_refreash_from_reply(redis_cluster_st *cluster, const redisRep
                 continue;
             }
 
-            ip = reply->element[i]->element[j]->element[0]->str;
+            strcpy(ip, reply->element[i]->element[j]->element[0]->str);
+            if (0 != cluster->host_mask_) {
+                _redis_cluster_hostmask_exchang(cluster->host_mask_, cluster->host_dest_, ip);
+            }
             port = reply->element[i]->element[j]->element[1]->integer;
 
             old_idx = _redis_cluster_find_connection(cluster, ip, port);
@@ -276,7 +286,7 @@ int _redis_cluster_refreash_from_reply(redis_cluster_st *cluster, const redisRep
         }
     }
 
-    for (i = cluster_idx; i < cluster->node_count; ++i) {
+    for (i = cluster_idx; i < (size_t)cluster->node_count; ++i) {
         _redis_cluster_node_free(cluster->redis_nodes[i]);
         cluster->redis_nodes[i] = NULL;
     }
@@ -400,7 +410,7 @@ int _redis_command_ping(redisContext *ctx)
     }
 
     int ret = -1;
-    redisReply *reply = redisCommand(ctx, "PING");
+    redisReply *reply = (redisReply *)redisCommand(ctx, "PING");
     if (!reply) {
         return -1;
     }
@@ -417,7 +427,7 @@ redisReply *_redis_command_cluster_slots(redisContext *ctx)
         return NULL;
     }
 
-    redisReply *reply = redisCommand(ctx, "CLUSTER SLOTS");
+    redisReply *reply = (redisReply *)redisCommand(ctx, "CLUSTER SLOTS");
     if (!reply) {
         return NULL;
     }
@@ -425,13 +435,39 @@ redisReply *_redis_command_cluster_slots(redisContext *ctx)
     return reply;
 }
 
-redis_cluster_st *redis_cluster_init(const char (*ips)[64], int *ports, int count, int timeout, int master_ctx_cnt)
+void _redis_cluster_hostmask_exchang(uint32_t mask, uint32_t dest, char *host)
+{
+    mask = htonl(mask);
+    dest = htonl(dest);
+
+    struct sockaddr_in adr_inet;
+    if (!inet_aton(host, &adr_inet.sin_addr)) {
+        return;
+    }
+
+    uint32_t src = adr_inet.sin_addr.s_addr;
+    src &= ~mask;
+    dest &= mask;
+    src |= dest;
+    adr_inet.sin_addr.s_addr = src;
+    strcpy(host, inet_ntoa(adr_inet.sin_addr));
+}
+
+redis_cluster_st *redis_cluster_init()
+{
+    redis_cluster_st *cluster = (redis_cluster_st *)malloc(sizeof(redis_cluster_st));
+    memset(cluster, 0x00, sizeof(redis_cluster_st));
+    return cluster;
+}
+
+int redis_cluster_connect(redis_cluster_st *cluster, const char (*ips)[64], int *ports, int count, int timeout)
 {
     if (!ips || !ports || count < 0 || timeout <= 0) {
-        return NULL;
+        return -1;
     }
     redisContext *ctx = NULL;
     redisReply *r = NULL;
+    int rc;
     struct timeval tv;
     tv.tv_sec = timeout / 1000;
     tv.tv_usec = timeout % 1000;
@@ -471,16 +507,9 @@ redis_cluster_st *redis_cluster_init(const char (*ips)[64], int *ports, int coun
             ctx = NULL;
         }
         _redis_cluster_log("Init fail.");
-        return NULL;
+        return -1;
     }
 
-    redis_cluster_st *cluster = (redis_cluster_st *)malloc(sizeof(redis_cluster_st));
-    if (!cluster) {
-        goto ON_INIT_ERROR;
-    }
-    memset(cluster, 0x00, sizeof(redis_cluster_st));
-
-    cluster->master_ctx_cnt = master_ctx_cnt;
     cluster->timeout = tv;
     cluster->slot_list = _slot_list_init();
     if (!cluster->slot_list) {
@@ -488,7 +517,7 @@ redis_cluster_st *redis_cluster_init(const char (*ips)[64], int *ports, int coun
         goto ON_INIT_ERROR;
     }
 
-    int rc = _redis_cluster_refreash_from_reply(cluster, r);
+    rc = _redis_cluster_refresh_from_reply(cluster, r);
     if (rc < 0) {
         _redis_cluster_log("Refresh fail.");
         goto ON_INIT_ERROR;
@@ -496,13 +525,9 @@ redis_cluster_st *redis_cluster_init(const char (*ips)[64], int *ports, int coun
 
     freeReplyObject(r);
     redisFree(ctx);
-    return cluster;
+    return 0;
 
 ON_INIT_ERROR:
-    if (cluster) {
-        free(cluster);
-        cluster = NULL;
-    }
     if (r) {
         freeReplyObject(r);
         r = NULL;
@@ -511,7 +536,7 @@ ON_INIT_ERROR:
         redisFree(ctx);
         ctx = NULL;
     }
-    return NULL;
+    return -1;
 }
 
 void redis_cluster_free(redis_cluster_st *cluster)
@@ -533,6 +558,13 @@ void redis_cluster_free(redis_cluster_st *cluster)
     free(cluster);
 }
 
+int redis_cluster_set_hostmask(redis_cluster_st *cluster, uint32_t mask, uint32_t dest)
+{
+    cluster->host_mask_ = mask;
+    cluster->host_dest_ = dest;
+    return 0;
+}
+
 redisReply *redis_cluster_execute(redis_cluster_st *cluster, const char *key, const char *fmt, ...)
 {
     int slot = _crc16(key, strlen(key)) % REDIS_CLUSTER_SLOTS;
@@ -544,6 +576,14 @@ redisReply *redis_cluster_execute(redis_cluster_st *cluster, const char *key, co
     va_end(ap);
 
     return r;
+}
+
+redisReply *redis_cluster_v_execute(redis_cluster_st *cluster, const char *key, const char *fmt, va_list ap)
+{
+    int slot = _crc16(key, strlen(key)) % REDIS_CLUSTER_SLOTS;
+
+    _redis_cluster_log("Key[%s] Slot[%d]", key, slot);
+    return redis_cluster_arg_execute(cluster, slot, fmt, ap);
 }
 
 redisReply *redis_cluster_arg_execute(redis_cluster_st *cluster, int slot, const char *fmt, va_list ap)
@@ -578,6 +618,12 @@ int redis_cluster_append(redis_cluster_st *cluster, const char *key, const char 
     return rc;
 }
 
+int redis_cluster_v_append(redis_cluster_st *cluster, const char *key, const char *fmt, va_list ap)
+{
+    int slot = _crc16(key, strlen(key)) % REDIS_CLUSTER_SLOTS;
+    return redis_cluster_arg_append(cluster, slot, fmt, ap);
+}
+
 int redis_cluster_arg_append(redis_cluster_st *cluster, int slot, const char *fmt, va_list ap)
 {
     if (!cluster || !slot || !fmt) {
@@ -597,7 +643,7 @@ int redis_cluster_arg_append(redis_cluster_st *cluster, int slot, const char *fm
             }
             _redis_cluster_log("Refresh cluster.");
             // Refresh cluster while reconnect fail.
-            rc = _redis_cluster_refreash(cluster);
+            rc = _redis_cluster_refresh(cluster);
             if (rc < 0) {
                 _redis_cluster_log("Refresh cluster fail.");
                 return -1;
@@ -656,6 +702,14 @@ redisReply *redis_cluster_get_reply(redis_cluster_st *cluster)
         return NULL;
     }
 
+    rc = redisSetTimeout(cluster->redis_nodes[handler_idx]->ctx, cluster->timeout);
+    if (REDIS_OK != rc) {
+        _redis_cluster_log("Set timeout fail.[%d]", rc);
+        redisFree(cluster->redis_nodes[handler_idx]->ctx);
+        cluster->redis_nodes[handler_idx]->ctx = NULL;
+        return NULL;
+    }
+
     rc = redisGetReply(cluster->redis_nodes[handler_idx]->ctx, (void **)&reply);
     if (REDIS_OK != rc || NULL == reply) {
         redisFree(cluster->redis_nodes[handler_idx]->ctx);
@@ -688,7 +742,7 @@ redisReply *redis_cluster_get_reply(redis_cluster_st *cluster)
         freeReplyObject(reply);
         if (handler_idx < 0) {
             /* Refresh cluster nodes */
-            rc = _redis_cluster_refreash(cluster);
+            rc = _redis_cluster_refresh(cluster);
             if (rc < 0) {
                 _redis_cluster_log("Refresh cluster fail.");
                 return NULL;

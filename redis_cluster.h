@@ -47,12 +47,14 @@ typedef struct {
     redis_cluster_node_st *redis_nodes[REDIS_CLUSTER_NODE_COUNT];
     redis_cluster_node_st *slots_handler[REDIS_CLUSTER_SLOTS];
     int state;
-    int master_ctx_cnt;
     struct timeval timeout;
     _append_slot_list *slot_list;
+
+    uint32_t host_mask_;
+    uint32_t host_dest_;
 } redis_cluster_st;
-int _redis_cluster_refreash(redis_cluster_st *cluster);
-int _redis_cluster_refreash_from_reply(redis_cluster_st *cluster, const redisReply *reply);
+int _redis_cluster_refresh(redis_cluster_st *cluster);
+int _redis_cluster_refresh_from_reply(redis_cluster_st *cluster, const redisReply *reply);
 void _redis_cluster_set_slot(redis_cluster_st *cluster, redis_cluster_node_st *cluster_node, int slot);
 int _redis_cluster_find_connection(redis_cluster_st *cluster, const char *ip, int port);
 
@@ -60,13 +62,20 @@ int _redis_cluster_find_connection(redis_cluster_st *cluster, const char *ip, in
 int _redis_command_ping(redisContext *ctx);
 redisReply *_redis_command_cluster_slots(redisContext *ctx);
 
+void _redis_cluster_hostmask_exchang(uint32_t mask, uint32_t dest, char *host);
+
 /* Client interface */
-redis_cluster_st *redis_cluster_init(const char (*ips)[64], int *ports, int count, int timeout, int master_ctx_cnt);
+redis_cluster_st *redis_cluster_init();
+int redis_cluster_connect(redis_cluster_st *cluster, const char (*ips)[64], int *ports, int count, int timeout);
 void redis_cluster_free(redis_cluster_st *cluster);
 
+int redis_cluster_set_hostmask(redis_cluster_st *cluster, uint32_t mask, uint32_t dest);
+
 redisReply *redis_cluster_execute(redis_cluster_st *cluster, const char *key, const char *fmt, ...);
+redisReply *redis_cluster_v_execute(redis_cluster_st *cluster, const char *key, const char *fmt, va_list ap);
 redisReply *redis_cluster_arg_execute(redis_cluster_st *cluster, int slot, const char *fmt, va_list ap);
 int redis_cluster_append(redis_cluster_st *cluster, const char *key, const char *fmt, ...);
+int redis_cluster_v_append(redis_cluster_st *cluster, const char *key, const char *fmt, va_list ap);
 int redis_cluster_arg_append(redis_cluster_st *cluster, int slot, const char *fmt, va_list ap);
 redisReply *redis_cluster_get_reply(redis_cluster_st *cluster);
 
