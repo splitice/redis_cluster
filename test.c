@@ -13,7 +13,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    char *key = argv[2];
+    char *key = argv[1];
     char cmd_args[1024] = {0x00};
     int i;
     for (i = 1; i < argc; ++i) {
@@ -40,7 +40,7 @@ int main(int argc, char *argv[])
         6384
     };
 
-    redis_cluster_st *cluster = redis_cluster_init((const char(*)[64])ips, ports, 6, 1000, 1);
+    redis_cluster_st *cluster = redis_cluster_init();
     if (!cluster) {
         printf("Init cluster fail.\n");
         return -1;
@@ -48,6 +48,13 @@ int main(int argc, char *argv[])
 
     int rc;
     char c;
+
+    rc = redis_cluster_connect(cluster, (const char(*)[64])ips, ports, 6, 1000);
+    if (rc < 0) {
+        printf("Connect to redis cluster fail.\n");
+        return -1;
+    }
+
     redisReply *reply;
     while (1) {
         c = getchar();

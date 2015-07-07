@@ -10,7 +10,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-// #define DEBUG
+#define DEBUG
 #ifdef DEBUG
 #define _redis_cluster_log(fmt, arg...) _redis_cluster_print_log(__LINE__, fmt, ##arg)
 void _redis_cluster_print_log(int line, const char *fmt, ...)
@@ -134,7 +134,7 @@ int _redis_cluster_refresh(redis_cluster_st *cluster)
             redisFree(cluster->redis_nodes[i]->ctx);
             cluster->redis_nodes[i]->ctx = NULL;
             _redis_cluster_log("Refresh from reply fail.");
-            continue;
+            return -1;
         }
 
         return 0;
@@ -150,10 +150,8 @@ int _redis_cluster_refresh_from_reply(redis_cluster_st *cluster, const redisRepl
     }
     size_t i, j;
     int k;
-    int rc;
     int cluster_node_count = reply->elements;
     int cluster_idx = cluster_node_count;
-    int old_idx;
     char ip[512];
     int port;
 
@@ -175,49 +173,23 @@ int _redis_cluster_refresh_from_reply(redis_cluster_st *cluster, const redisRepl
         port = reply->element[i]->element[2]->element[1]->integer;
 
         /* Master node */
-        old_idx = _redis_cluster_find_connection(cluster, ip, port);
-        if (old_idx < 0) {
-            /* Move old master node */
-            if (cluster->redis_nodes[i]) {
-                if (cluster->node_count < REDIS_CLUSTER_NODE_COUNT) {
-                    cluster->redis_nodes[cluster->node_count] = cluster->redis_nodes[i];
-                    cluster->redis_nodes[cluster->node_count]->id = cluster->node_count;
-                    ++cluster->node_count;
-                } else {
-                    _redis_cluster_node_free(cluster->redis_nodes[i]);
-                }
-                cluster->redis_nodes[i] = NULL;
-            }
-
-            /* Create new master node */
-            cluster->redis_nodes[i] = _redis_cluster_node_init(i, ip, port);
-            if (!cluster->redis_nodes[i]) {
-                _redis_cluster_log("Init new master node fail.");
-                return -1;
-            }
-        } else {
-            redis_cluster_node_st *swap_tmp = cluster->redis_nodes[i];
-            cluster->redis_nodes[i] = cluster->redis_nodes[old_idx];
-            cluster->redis_nodes[old_idx] = swap_tmp;
-
-            cluster->redis_nodes[i]->id = i;
-            cluster->redis_nodes[old_idx]->id = old_idx;
+        /* Move old master node */
+        if (cluster->redis_nodes[i]) {
+            _redis_cluster_node_free(cluster->redis_nodes[i]);
+            cluster->redis_nodes[i] = NULL;
         }
 
-        /* Check old connection */
-        if (cluster->redis_nodes[i]->ctx) {
-            rc = _redis_command_ping(cluster->redis_nodes[i]->ctx);
-            if (rc < 0) {
-                redisFree(cluster->redis_nodes[i]->ctx);
-                cluster->redis_nodes[i]->ctx = NULL;
-            }
+        /* Create new master node */
+        cluster->redis_nodes[i] = _redis_cluster_node_init(i, ip, port);
+        if (!cluster->redis_nodes[i]) {
+            _redis_cluster_log("Init new master node fail.");
+            return -1;
         }
+
+        cluster->redis_nodes[i]->ctx = redisConnectWithTimeout(cluster->redis_nodes[i]->ip, cluster->redis_nodes[i]->port, cluster->timeout);
         if (!cluster->redis_nodes[i]->ctx) {
-            cluster->redis_nodes[i]->ctx = redisConnectWithTimeout(cluster->redis_nodes[i]->ip, cluster->redis_nodes[i]->port, cluster->timeout);
-            if (!cluster->redis_nodes[i]->ctx) {
-                _redis_cluster_log("Make new connection fail.");
-                return -1;
-            }
+            _redis_cluster_log("Make new connection fail.");
+            return -1;
         }
 
         /* Slots handler */
@@ -228,7 +200,7 @@ int _redis_cluster_refresh_from_reply(redis_cluster_st *cluster, const redisRepl
         _redis_cluster_log("Master:[%d] (%d - %d)[%s:%d]", (int)i, (int)reply->element[i]->element[0]->integer, (int)reply->element[i]->element[1]->integer, ip, port);
 
         /* Slave node */
-        for (j = 3; j < reply->element[i]->elements; ++j) {
+        for (j = cluster_node_count; j < reply->element[i]->elements; ++j) {
             if (reply->element[i]->element[j]->type != REDIS_REPLY_ARRAY) {
                 continue;
             }
@@ -239,45 +211,23 @@ int _redis_cluster_refresh_from_reply(redis_cluster_st *cluster, const redisRepl
             }
             port = reply->element[i]->element[j]->element[1]->integer;
 
-            old_idx = _redis_cluster_find_connection(cluster, ip, port);
-            if (old_idx < 0) {
-                /* Move old slave node */
-                if (cluster->redis_nodes[cluster_idx]) {
-                    if (cluster->node_count < REDIS_CLUSTER_NODE_COUNT) {
-                        cluster->redis_nodes[cluster->node_count] = cluster->redis_nodes[cluster_idx];
-                        ++cluster->node_count;
-                    } else {
-                        _redis_cluster_node_free(cluster->redis_nodes[cluster_idx]);
-                    }
-                    cluster->redis_nodes[cluster_idx] = NULL;
-                }
-
-                /* Create new slave node */
-                cluster->redis_nodes[cluster_idx] = _redis_cluster_node_init(cluster_idx, ip, port);
-                if (!cluster->redis_nodes[cluster_idx]) {
-                    _redis_cluster_log("Init new slave node fail.");
-                    return -1;
-                }
-            } else {
-                redis_cluster_node_st *swap_tmp = cluster->redis_nodes[cluster_idx];
-                cluster->redis_nodes[cluster_idx] = cluster->redis_nodes[old_idx];
-                cluster->redis_nodes[old_idx] = swap_tmp;
+            /* Move old slave node */
+            if (cluster->redis_nodes[cluster_idx]) {
+                _redis_cluster_node_free(cluster->redis_nodes[cluster_idx]);
+                cluster->redis_nodes[cluster_idx] = NULL;
             }
 
-            /* Check old connection */
-            if (cluster->redis_nodes[cluster_idx]->ctx) {
-                rc = _redis_command_ping(cluster->redis_nodes[cluster_idx]->ctx);
-                if (rc < 0) {
-                    redisFree(cluster->redis_nodes[cluster_idx]->ctx);
-                    cluster->redis_nodes[cluster_idx]->ctx = NULL;
-                }
+            /* Create new slave node */
+            cluster->redis_nodes[cluster_idx] = _redis_cluster_node_init(cluster_idx, ip, port);
+            if (!cluster->redis_nodes[cluster_idx]) {
+                _redis_cluster_log("Init new slave node fail.");
+                return -1;
             }
+
+            cluster->redis_nodes[cluster_idx]->ctx = redisConnectWithTimeout(cluster->redis_nodes[cluster_idx]->ip, cluster->redis_nodes[cluster_idx]->port, cluster->timeout);
             if (!cluster->redis_nodes[cluster_idx]->ctx) {
-                cluster->redis_nodes[cluster_idx]->ctx = redisConnectWithTimeout(cluster->redis_nodes[cluster_idx]->ip, cluster->redis_nodes[cluster_idx]->port, cluster->timeout);
-                if (!cluster->redis_nodes[cluster_idx]->ctx) {
-                    _redis_cluster_log("Make new connection fail.");
-                    return -1;
-                }
+                _redis_cluster_log("Make new connection fail.");
+                return -1;
             }
 
             _redis_cluster_log("Slave:[%d] [%s:%d]", cluster_idx, ip, port);
@@ -286,10 +236,6 @@ int _redis_cluster_refresh_from_reply(redis_cluster_st *cluster, const redisRepl
         }
     }
 
-    for (i = cluster_idx; i < (size_t)cluster->node_count; ++i) {
-        _redis_cluster_node_free(cluster->redis_nodes[i]);
-        cluster->redis_nodes[i] = NULL;
-    }
     cluster->node_count = cluster_idx;
     return 0;
 }
@@ -735,7 +681,6 @@ redisReply *redis_cluster_get_reply(redis_cluster_st *cluster)
         p = strchr(s + 1, ' ');    /* MOVED[S]3999[P]127.0.0.1:6381 */
         *p = '\0';
         redirect_slot = atoi(s + 1);
-        assert(redirect_slot == slot);
         s = strchr(p + 1, ':');    /* MOVED 3999[P]127.0.0.1[S]6381 */
         *s = '\0';
         handler_idx = _redis_cluster_find_connection(cluster, p + 1, atoi(s + 1));
@@ -773,31 +718,15 @@ redisReply *redis_cluster_get_reply(redis_cluster_st *cluster)
             }
         }
 
-        redirect_ctx = redisConnectWithTimeout(cluster->redis_nodes[handler_idx]->ip, cluster->redis_nodes[handler_idx]->port, cluster->timeout);
-        if (!redirect_ctx || redirect_ctx->err) {
-            if (redirect_ctx) {
-                redisFree(redirect_ctx);
-                redirect_ctx = NULL;
-            }
-            _redis_cluster_log("Connect to redis redirect server timeout.");
-            return NULL;
-        }
-
+        redirect_ctx = cluster->redis_nodes[handler_idx]->ctx;
         reply = (redisReply *)(redisvCommand(redirect_ctx, record->fmt, record->ap));
         if (!reply) {
-            redisFree(redirect_ctx);
-            redirect_ctx = NULL;
             return NULL;
         }
     }
 
     va_end(record->ap);
     record->valid_ap = 0;
-
-    if (redirect_ctx) {
-        redisFree(redirect_ctx);
-        redirect_ctx = NULL;
-    }
 
     return reply;
 }
