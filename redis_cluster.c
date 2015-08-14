@@ -534,7 +534,7 @@ redisReply *redis_cluster_v_execute(redis_cluster_st *cluster, const char *key, 
 
 redisReply *redis_cluster_arg_execute(redis_cluster_st *cluster, int slot, const char *fmt, va_list ap)
 {
-    if (!cluster || !slot || !fmt) {
+    if (!cluster || slot < 0 || !fmt) {
         return NULL;
     }
 
@@ -572,7 +572,7 @@ int redis_cluster_v_append(redis_cluster_st *cluster, const char *key, const cha
 
 int redis_cluster_arg_append(redis_cluster_st *cluster, int slot, const char *fmt, va_list ap)
 {
-    if (!cluster || !slot || !fmt) {
+    if (!cluster || slot < 0 || !fmt) {
         return -1;
     }
 

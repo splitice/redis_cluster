@@ -13,7 +13,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    char *key = argv[1];
+    char *key = argv[2];
     char cmd_args[1024] = {0x00};
     int i;
     for (i = 1; i < argc; ++i) {
