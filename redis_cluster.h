@@ -52,6 +52,7 @@ typedef struct {
 
     uint32_t host_mask_;
     uint32_t host_dest_;
+	const char* errstr;
 } redis_cluster_st;
 int _redis_cluster_refresh(redis_cluster_st *cluster);
 int _redis_cluster_refresh_from_reply(redis_cluster_st *cluster, const redisReply *reply);

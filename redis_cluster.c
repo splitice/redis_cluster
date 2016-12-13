@@ -607,6 +607,7 @@ int redis_cluster_arg_append(redis_cluster_st *cluster, int slot, const char *fm
     _redis_cluster_log("Slot[%d] handler[%s:%d]", slot, cluster->redis_nodes[handler_idx]->ip, cluster->redis_nodes[handler_idx]->port);
     assert(cluster->redis_nodes[handler_idx]->ctx);
     rc = redisvAppendCommand(cluster->redis_nodes[handler_idx]->ctx, fmt, ap);
+	cluster->errstr = cluster->redis_nodes[handler_idx]->ctx->errstr;
     if (REDIS_OK != rc) {
         redisFree(cluster->redis_nodes[handler_idx]->ctx);
         cluster->redis_nodes[handler_idx]->ctx = NULL;
@@ -623,6 +624,7 @@ int redis_cluster_arg_append(redis_cluster_st *cluster, int slot, const char *fm
         return -1;
     }
 
+	cluster->errstr = NULL;
     return 0;
 }
 
